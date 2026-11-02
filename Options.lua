@@ -1155,6 +1155,11 @@ function Options:ReloadIfOpen()
 	if self.content and self.panel:IsShown() then self:Reload() end
 end
 
+-- 物品资料到了：只重绑左列表（名字 / 图标）。★ 别走 Reload —— 这条事件在开面板时会连发，整页重排一帧好几次
+function Options:ItemDataReady()
+	if self.content and self.panel:IsShown() then self:ReloadList() end
+end
+
 function Options:Open()
 	Settings.OpenToCategory(self.category:GetID())
 end

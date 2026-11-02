@@ -73,7 +73,10 @@ local function Aura(e)
 	if not id then return nil end
 	if Bar.auraGen[id] ~= Bar.gen then
 		Bar.auraGen[id] = Bar.gen
-		Bar.auraVal[id] = ns.PlayerAura(id)
+		local v = ns.PlayerAura(id)
+		Bar.auraVal[id] = v
+		-- removed / updated 只给实例 ID ⇒ 这里登记，供 Involved 认人（换代时清空）
+		if v and v.auraInstanceID then Bar.auraIns[v.auraInstanceID] = true end
 	end
 	return Bar.auraVal[id]
 end
@@ -193,8 +196,7 @@ function Bar:UpdateProcOrder()
 	end
 end
 
--- ★ 起 / 清都得走这两个函数（只写内存那份，/reload 后被动 ICD 就接不上了）；存档记的是到期时刻、
---   基准 GetServerTime()（GetTime() 重登会归零），键 = 法术ID
+-- ★ 起 / 清只能走这两个函数（/reload 后内存那份就没了）；存档记到期时刻，基准 GetServerTime()
 function Bar:SetIcd(e, start, len)
 	local c = self.icd[e]
 	if c then c.start, c.len = start, len else self.icd[e] = { start = start, len = len } end
@@ -208,8 +210,7 @@ function Bar:ClearIcd(e)
 	if e.spellID then ns.db.icd[e.spellID] = nil end
 end
 
--- 一格此刻该画哪段冷却（两条来源，读到哪个用哪个）：① API 读得到就按它；② 读不到（被动 ICD）才按
--- 「触发时刻 + 此刻 + 条目配的冷却」自己算。★ 返回 nil = 都没读到，调用方别据此清已有记录
+-- 冷却两条来源：API 读得到用 API，读不到才按「触发时刻 + 配的冷却」算。★ 返回 nil = 没读到，别据此清记录
 function Bar:CdOf(e)
 	local slot = Resident(e)
 	local start, len
@@ -265,11 +266,12 @@ function Bar:EquipChanged(slot)
 	self:Update()
 end
 
--- 物品冷却一变就重读（装备栏右键 / 动作条 / 快捷条点击都走这条）；★ 事件不说哪一格 ⇒ 全扫一遍；
+-- 物品冷却一变就重读（装备栏右键 / 动作条 / 快捷条点击都走这条）；★ 事件不说哪一格 ⇒ 只扫关注集合
 -- ★ 只认 API（被动 ICD 归 UpdateIcd）；★ 读不到不主动清
 function Bar:ReadItemIcd()
-	for _, e in ipairs(ns.db.entries) do
-		local slot = Resident(e)
+	for i = 1, #self.worn do
+		local e = self.worn[i]
+		local slot = not e.procOnly and ns.EquippedSlotOf(e.itemID)
 		if slot and CanReadApi(e, slot) and not Aura(e) then
 			local start, len = ns.ItemCooldown(slot)
 			if start then self:SetIcd(e, start, len) end
@@ -279,7 +281,10 @@ end
 
 -- ★ 先问 API（物品冷却重读一次即可，物品对象不随 /reload 重建），读不到才看存档那份；★ 增益在身不接
 function Bar:RestoreIcd()
-	for _, e in ipairs(ns.db.entries) do
+	local alive, entries = {}, ns.db.entries
+	for i = 1, #entries do
+		local e = entries[i]
+		alive[e.spellID] = true
 		local slot, start, len = Resident(e), nil, nil
 		if slot and not Aura(e) then
 			start, len = ns.ItemCooldown(slot)
@@ -290,8 +295,6 @@ function Bar:RestoreIcd()
 		end
 		if start then self:SetIcd(e, start, len) else self:ClearIcd(e) end
 	end
-	local alive = {}
-	for _, e in ipairs(ns.db.entries) do alive[e.spellID] = true end
 	for spellID in pairs(ns.db.icd) do
 		if not alive[spellID] then ns.db.icd[spellID] = nil end
 	end
@@ -334,8 +337,7 @@ local function Paint(btn, e)
 	s.aStart, s.aDur, s.iStart, s.iLen, s.font = aStart, aDur, icdStart, icdLen, ns.db.fontSize
 	btn.paint = s
 
-	-- 逐项只下发"真的变了"的那几样：触发一次要来回重画两遍（亮起 / 熄灭），
-	-- 同一张图 / 同一组坐标重设两遍纯属白跑 C
+	-- 逐项只下发真变了的：一次触发要来回重画两遍，同一张图 / 同一组坐标重设两遍纯属白跑 C
 	if btn.tex ~= tex then
 		btn.tex = tex
 		btn.icon:SetTexture(tex)
@@ -350,8 +352,7 @@ local function Paint(btn, e)
 		btn.border:SetTexCoord(0, v, 0, v)
 	end
 
-	-- 亮 / 不亮只在翻转时换贴图并起停动画：不亮时不播（贴图是空的，播了看不见却每帧在动），
-	-- 同图重复 SetTexture 也是白跑一趟 C。全插件只有这一处下发 Play/Stop
+	-- 亮灭只在翻转时换贴图并起停动画（空贴图不播）；全插件只有这一处下发 Play/Stop
 	if btn.animOn ~= up then
 		btn.animOn = up
 		btn.glow:SetTexture(up and GLOW_TEX or nil)
@@ -365,8 +366,7 @@ local function Paint(btn, e)
 		end
 	end
 
-	-- ★ 冷却帧只在「哪一段」真变了才喂：SetCooldown / Clear 每次都会重建刷条与倒计时，
-	--   而触发这一路每来回一次就会重画两遍（亮起 / 熄灭），同一段喂两遍纯属白做
+	-- ★ 冷却帧只在「哪一段」真变了才喂：SetCooldown / Clear 每次都会重建刷条与倒计时
 	if aStart then
 		if btn.aStart ~= aStart or btn.aDur ~= aDur then
 			btn.aStart, btn.aDur = aStart, aDur
@@ -410,8 +410,7 @@ local function Paint(btn, e)
 	return v
 end
 
--- ★ 这里不换代：光环缓存只在 RefreshAura 里换代（那一处才现查），其余重画直接复用 ——
---   每次重画都现查一遍，站着不动也在按重画次数造垃圾（GetPlayerAuraBySpellID 每次新建一张表）
+-- ★ 这里不换代（换代只在 RefreshAura）：每次重画都现查 = 按重画次数造垃圾
 function Bar:Refresh()
 	self:UpdateIcd()
 	self:UpdateProcOrder()
@@ -436,8 +435,7 @@ function Bar:Refresh()
 	self.live = live
 end
 
--- 高频事件（增益 / 过图）只重画：几何与宏不动；抓手显隐跟着 live，战斗中留到脱战那次重排补
--- ★ 动手画之前先把待办落地（flag 已清 ⇒ 定时器那趟空转，不会重入）
+-- 高频事件只重画（几何与宏不动）；★ 先落地待办：flag 已清 ⇒ 定时器那趟空转、不重入
 function Bar:Repaint()
 	self:ApplyPending()
 	self:Refresh()
@@ -449,8 +447,9 @@ function Bar:Layout()
 	-- 「关注集合」= 监控列表 ∩ 身上穿着的（最多 19 条，实际更少）：未装备的条目不可能上条，
 	-- 它绑的法术也就不该管（上图标、查光环、倒计时、触发顺序都只看这一份）。
 	-- ★ 只有装备变更才会改它，而装备变更走的正是这里（战斗中换不了装备 ⇒ 不会漏）
-	local entries, worn, n = ns.db.entries, self.worn, 0
+	local entries, worn, set, n = ns.db.entries, self.worn, self.spellSet, 0
 	for k = #worn, 1, -1 do worn[k] = nil end
+	for k in pairs(set) do set[k] = nil end
 	-- 一次扫完装备栏就够（逐条目去查是 #entries × 19 次调用）；同 ID 取靠前那格
 	local equipped = {}
 	for slot = 1, 19 do
@@ -463,6 +462,7 @@ function Bar:Layout()
 		local slot = e.enabled ~= false and equipped[e.itemID]
 		if slot then
 			worn[#worn + 1] = e
+			if e.spellID then set[e.spellID] = true end
 			if on and not e.procOnly and n < SLOT_MAX then
 				n = n + 1
 				self:BindSlot(self.slots[n], e, slot)
@@ -501,11 +501,37 @@ local function AuraDiffers(prev, now)
 		or now.expirationTime ~= prev.expirationTime or now.duration ~= prev.duration)
 end
 
--- 事件带的变化信息（added / removed / updated）字段不稳 ⇒ 不信它：把关注集合逐个现查，只有
--- 「在 / 不在」「层数」「起止时刻」跟上次查到的不同才重画（增益不决定谁占哪一格 ⇒ 只重画，绝不走 Update）
--- ★ 换代只在这里：本代的光环值只查这一遍，其余重画全部复用
+-- 只想挡「跟自己无关」的事件：无关就一次光环查询都不发（垃圾全来自 GetPlayerAuraBySpellID 现造的表）。
+-- ★ 拿不准就放行（不是表 / 全量更新 / 三张列表都没给）：自己增益结束那一下漏了，冷却就接不上。
+local function Hit(ins, ids)
+	for i = 1, #ids do
+		if ins[ids[i]] then return true end
+	end
+end
+
+-- added 直接给 spellId；removed / updated 只给实例 ID ⇒ 查 auraIns（Aura() 本代登记的那张）
+local function Involved(info)
+	if type(info) ~= "table" or info.isFullUpdate then return true end
+	local added, ids = info.addedAuras, info.removedAuraInstanceIDs
+	if not (added or ids or info.updatedAuraInstanceIDs) then return true end
+	if added then
+		local set = Bar.spellSet
+		for i = 1, #added do
+			if set[added[i].spellId] then return true end
+		end
+	end
+	local ins = Bar.auraIns
+	if ids and Hit(ins, ids) then return true end
+	ids = info.updatedAuraInstanceIDs
+	if ids and Hit(ins, ids) then return true end
+	return false
+end
+
+-- ★ 只有「在/不在·层数·起止时刻」变了才重画；换代也只在这里：本代查一遍，其余重画复用 + 实例表重建
 function Bar:RefreshAura()
 	self.gen = self.gen + 1
+	local ins = self.auraIns
+	for k in pairs(ins) do ins[k] = nil end
 	local changed = false
 	for i = 1, #self.worn do
 		local e = self.worn[i]
@@ -515,8 +541,7 @@ function Bar:RefreshAura()
 	return changed
 end
 
--- ★★ 事件只置脏、一帧只落地一次：同一帧里常连着好几个（一次施法上两层、刷新时还叠着减益），
---    逐个现查 + 逐个重画整条 ⇒ 开销按事件数线性涨（查一次就是一张光环表 = 一份垃圾）
+-- ★★ 事件只置脏、一帧只落地一次：同帧多个事件合并成一趟（否则开销按事件数线性涨）
 local function OnFlush()
 	Bar.flushQueued = false
 	if Bar:ApplyPending() then Bar:Repaint() end
@@ -543,7 +568,9 @@ function Bar:ApplyPending()
 	return changed
 end
 
-function Bar:AuraChanged() Queue(self, true, false) end
+function Bar:AuraChanged(info)
+	if Involved(info) then Queue(self, true, false) end
+end
 
 function Bar:ItemCooldownChanged() Queue(self, false, true) end
 
@@ -633,6 +660,8 @@ function Bar:Create()
 	self.auraGen = {}
 	self.auraVal = {}
 	self.worn = {}
+	self.spellSet = {}
+	self.auraIns = {}
 	self.auraDirty, self.icdDirty, self.flushQueued = false, false, false
 	for i = 1, SLOT_MAX do
 		self:CreateSlot(i)

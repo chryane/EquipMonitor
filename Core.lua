@@ -112,9 +112,7 @@ function ns:Move(index, delta)
 	Changed()
 end
 
--- ★ 客户端没缓存名字的物品要主动要一次数据，否则一直显示「未知物品」（点一下才补上）。
---   ★ 两条入口都得走：GetItemInfo 是"查不到就去要"，RequestLoadItemDataByID 是显式请求 ——
---     这个客户端上只调后者没反应（2026-10-21 导入后仍然未知）。
+-- ★ 没缓存名字的物品要主动要一次；GetItemInfo 与 RequestLoadItemDataByID 都得调（后者单独调没反应）
 function ns.RequestItemData(entries)
 	for i = 1, #entries do
 		local id = entries[i].itemID
@@ -183,9 +181,9 @@ function ns:InitEvents()
 	local f = CreateFrame("Frame")
 	f:SetScript("OnEvent", function(_, event, arg1, arg2)
 		if event == "GET_ITEM_INFO_RECEIVED" then
-			ns.Options:ReloadIfOpen()
+			ns.Options:ItemDataReady()
 		elseif event == "UNIT_AURA" then
-			ns.Bar:AuraChanged()
+			ns.Bar:AuraChanged(arg2)
 		elseif event == "PLAYER_EQUIPMENT_CHANGED" then
 			ns.Bar:EquipChanged(arg1)
 		elseif event == "BAG_UPDATE_COOLDOWN" then
@@ -215,9 +213,28 @@ function ns:OnLoad()
 	self:InitEvents()
 end
 
+-- 现场自证：/emon debug（本客户端没有 debug 库）—— 强制 GC 后取存活量 + 数一遍运行时容器，只读
+local function Count(t)
+	local c = 0
+	for _ in pairs(t) do c = c + 1 end
+	return c
+end
+
+function ns:Debug()
+	local b = self.Bar
+	collectgarbage("collect")
+	UpdateAddOnMemoryUsage()
+	print(string.format("EquipMonitor %.1fKB / Lua %.0fKB", GetAddOnMemoryUsage(ADDON_NAME), collectgarbage("count")))
+	print(string.format("entries %d worn %d | auraVal %d auraGen %d auraUp %d auraAt %d icd %d db.icd %d ins %d set %d",
+		#self.db.entries, #b.worn, Count(b.auraVal), Count(b.auraGen), Count(b.auraUp), Count(b.auraAt),
+		Count(b.icd), Count(self.db.icd), Count(b.auraIns), Count(b.spellSet)))
+end
+
 SLASH_EQUIPMONITOR1 = "/emon"
 SLASH_EQUIPMONITOR2 = "/equipmonitor"
-SlashCmdList["EQUIPMONITOR"] = function() ns.Options:Open() end
+SlashCmdList["EQUIPMONITOR"] = function(msg)
+	if msg == "debug" then ns:Debug() else ns.Options:Open() end
+end
 
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
