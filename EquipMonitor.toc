@@ -1,4 +1,4 @@
-## Interface: 38002
+## Interface: 16001
 ## Title: EquipMonitor
 ## Notes: 监控已装备物品的触发效果与冷却：设置面板录入物品ID/法术ID，屏幕上按装备状态显示图标快捷条。斜杠命令：/emon 打开设置。
 ## Author: Raee

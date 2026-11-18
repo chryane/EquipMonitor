@@ -68,15 +68,19 @@ local function CanReadApi(e, slot)
 end
 
 -- 同一个法术一代只查一次（每调一次就现造一张光环表）；★ 换代只在 AuraChanged 做，别的重画一律复用
+-- ★ 光环受限时（战斗 / 副本 / 大秘 / PvP）这条查询只给 nil（RequiresNonSecretAura）——那不是
+--   「增益没了」而是「看不到」：留着上一代的值，画面停在最后喂进去的那段冷却上
 local function Aura(e)
 	local id = e and e.spellID
 	if not id then return nil end
 	if Bar.auraGen[id] ~= Bar.gen then
 		Bar.auraGen[id] = Bar.gen
-		local v = ns.PlayerAura(id)
-		Bar.auraVal[id] = v
-		-- removed / updated 只给实例 ID ⇒ 这里登记，供 Involved 认人（换代时清空）
-		if v and v.auraInstanceID then Bar.auraIns[v.auraInstanceID] = true end
+		if not C_Secrets.ShouldSpellAuraBeSecret(id) then
+			local v = ns.PlayerAura(id)
+			Bar.auraVal[id] = v
+			-- removed / updated 只给实例 ID ⇒ 这里登记，供 Involved 认人（换代时清空）
+			if v and v.auraInstanceID then Bar.auraIns[v.auraInstanceID] = true end
+		end
 	end
 	return Bar.auraVal[id]
 end
@@ -510,8 +514,11 @@ local function Hit(ins, ids)
 end
 
 -- added 直接给 spellId；removed / updated 只给实例 ID ⇒ 查 auraIns（Aura() 本代登记的那张）
+-- ★ 光环受限时整张 updateInfo 都是密值（12.1.0 起整个 payload 变密）：字段一个都不能碰，按「有关」兜底
 local function Involved(info)
-	if type(info) ~= "table" or info.isFullUpdate then return true end
+	if type(info) ~= "table" or issecrettable(info) or C_Secrets.ShouldAurasBeSecret() then return true end
+	local full = info.isFullUpdate
+	if issecretvalue(full) or full then return true end
 	local added, ids = info.addedAuras, info.removedAuraInstanceIDs
 	if not (added or ids or info.updatedAuraInstanceIDs) then return true end
 	if added then
@@ -570,6 +577,12 @@ end
 
 function Bar:AuraChanged(info)
 	if Involved(info) then Queue(self, true, false) end
+end
+
+-- ★ 限制状态一进一出就补一代真值：真机在该事件派发期间把限制状态一律读作 false（当场查会把
+--   「看不到」当成「增益没了」、凭空起一段冷却）⇒ 走 Queue，落地在帧末，那时读到的才是真状态
+function Bar:RestrictionChanged()
+	Queue(self, true, false)
 end
 
 function Bar:ItemCooldownChanged() Queue(self, false, true) end

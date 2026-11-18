@@ -1,5 +1,5 @@
 --[[ Core.lua - 存档 / 物品与法术信息 / 装备扫描 / 事件
-	 目标客户端：泰坦重铸 3.80.2，接口直调、不做存在性兜底。
+	 目标客户端：无限服 1.60.1（Interface 16001），接口直调、不做存在性兜底。
 ]]
 
 local ADDON_NAME, ns = ...
@@ -184,6 +184,9 @@ function ns:InitEvents()
 			ns.Options:ItemDataReady()
 		elseif event == "UNIT_AURA" then
 			ns.Bar:AuraChanged(arg2)
+		elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+			-- 光环限制一进一出（战斗 / 副本 / 大秘 / PvP）就补一代真值：受限期间查不到，只能冻着
+			ns.Bar:RestrictionChanged()
 		elseif event == "PLAYER_EQUIPMENT_CHANGED" then
 			ns.Bar:EquipChanged(arg1)
 		elseif event == "BAG_UPDATE_COOLDOWN" then
@@ -199,6 +202,7 @@ function ns:InitEvents()
 	f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 	f:RegisterEvent("BAG_UPDATE_COOLDOWN")
 	f:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+	f:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
 	-- ★ 必须做单元限定：不限定则小队 / 团队 / 目标 / 宠物 / 姓名板的光环变化全推过来
 	f:RegisterUnitEvent("UNIT_AURA", "player")
 	f:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -220,6 +224,10 @@ local function Count(t)
 	return c
 end
 
+local function On(v)
+	return v and "on" or "off"
+end
+
 function ns:Debug()
 	local b = self.Bar
 	collectgarbage("collect")
@@ -228,6 +236,13 @@ function ns:Debug()
 	print(string.format("entries %d worn %d | auraVal %d auraGen %d auraUp %d auraAt %d icd %d db.icd %d ins %d set %d",
 		#self.db.entries, #b.worn, Count(b.auraVal), Count(b.auraGen), Count(b.auraUp), Count(b.auraAt),
 		Count(b.icd), Count(self.db.icd), Count(b.auraIns), Count(b.spellSet)))
+	-- ★ 密值自证：光环受限时 updateInfo 与光环查询都变密值 ⇒ 快捷条只能冻在最后那一段（12.1.0 / 无限服 1.60.1）
+	print(string.format("secret auras %s cooldowns %s | restrict combat %s encounter %s m+ %s pvp %s",
+		On(C_Secrets.ShouldAurasBeSecret()), On(C_Secrets.ShouldCooldownsBeSecret()),
+		On(C_RestrictedActions.IsAddOnRestrictionActive(Enum.AddOnRestrictionType.Combat)),
+		On(C_RestrictedActions.IsAddOnRestrictionActive(Enum.AddOnRestrictionType.Encounter)),
+		On(C_RestrictedActions.IsAddOnRestrictionActive(Enum.AddOnRestrictionType.ChallengeMode)),
+		On(C_RestrictedActions.IsAddOnRestrictionActive(Enum.AddOnRestrictionType.PvPMatch))))
 end
 
 SLASH_EQUIPMONITOR1 = "/emon"

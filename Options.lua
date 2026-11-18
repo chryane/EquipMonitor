@@ -374,7 +374,7 @@ local function CreateSlotBox(parent)
 	return f
 end
 
--- ★ 本客户端的 SCROLL_FRAME_SCROLL_BAR_TEMPLATE 指向未定义模板，须自建 MinimalScrollBar
+-- ★ 照系统设置面板自建 MinimalScrollBar
 local function CreateScrollArea(panel, hideIfUnscrollable)
 	local s = CreateFrame("ScrollFrame", nil, panel)
 	local b = CreateFrame("EventFrame", nil, s, "MinimalScrollBar")
